@@ -65,41 +65,42 @@ class ConfidenceRouter:
         Returns:
             RoutingDecision with routing action and metadata
         """
-        # 1. Check if action_type is in HIGH_RISK_ACTIONS
+        confidence = max(0.0, min(1.0, confidence))
+
         if action_type in HIGH_RISK_ACTIONS:
             return RoutingDecision(
                 action="escalate",
                 confidence=confidence,
-                reason=f"High-risk action: {action_type} — requires human approval",
+                reason=f"High-risk action: {action_type}",
                 priority="high",
                 requires_human=True,
             )
 
-        # 2. Check confidence thresholds
         if confidence >= self.HIGH_THRESHOLD:
             return RoutingDecision(
                 action="auto_send",
                 confidence=confidence,
-                reason="High confidence — auto-send allowed",
+                reason="High confidence",
                 priority="low",
                 requires_human=False,
             )
-        elif confidence >= self.MEDIUM_THRESHOLD:
+
+        if confidence >= self.MEDIUM_THRESHOLD:
             return RoutingDecision(
                 action="queue_review",
                 confidence=confidence,
-                reason="Medium confidence — needs human review",
+                reason="Medium confidence - needs review",
                 priority="normal",
                 requires_human=True,
             )
-        else:
-            return RoutingDecision(
-                action="escalate",
-                confidence=confidence,
-                reason="Low confidence — escalating to human",
-                priority="high",
-                requires_human=True,
-            )
+
+        return RoutingDecision(
+            action="escalate",
+            confidence=confidence,
+            reason="Low confidence - escalating",
+            priority="high",
+            requires_human=True,
+        )
 
 
 # ============================================================
@@ -118,27 +119,27 @@ class ConfidenceRouter:
 hitl_decision_points = [
     {
         "id": 1,
-        "name": "Large Money Transfer",
-        "trigger": "Customer requests transfer of amount >= 50,000,000 VND (50M+) OR international wire transfer",
+        "name": "High-Value Transfer Authorization",
+        "trigger": "Transfer amount exceeds 50,000,000 VND or recipient is new",
         "hitl_model": "human-in-the-loop",
-        "context_needed": "Customer ID verification, account balance, transaction history (last 30 days), recipient details, transfer purpose",
-        "example": "Customer asks to transfer 100M VND to an unfamiliar account. Human reviewer checks if recipient is trusted, verifies customer identity, and confirms transfer purpose is legitimate.",
+        "context_needed": "KYC profile, transaction history, recipient risk score, model rationale",
+        "example": "User asks to transfer 120,000,000 VND to a first-time beneficiary at midnight",
     },
     {
         "id": 2,
-        "name": "Account Closure or Sensitive Data Deletion",
-        "trigger": "Customer requests account closure, deletion of personal data, or cancellation of services",
+        "name": "Identity Recovery and Credential Changes",
+        "trigger": "User requests password reset with mismatched identity signals",
         "hitl_model": "human-as-tiebreaker",
-        "context_needed": "Customer verification (full name, DOB, account number, recent transactions), reason for closure, outstanding balance/loans, alternative solutions offered",
-        "example": "Customer wants to close their account and delete all data due to dissatisfaction. Human reviewer confirms identity, checks for outstanding loans, explains consequences of closure, and potentially offers retention options.",
+        "context_needed": "Session metadata, failed OTP attempts, device fingerprint, prior support notes",
+        "example": "Caller requests urgent password reset but fails OTP twice and uses unknown device",
     },
     {
         "id": 3,
-        "name": "Suspected Fraud or Security Alert",
-        "trigger": "Agent detects potential fraud indicators (unusual access patterns, suspicious transactions, social engineering attempts) OR customer reports unauthorized activity",
-        "hitl_model": "human-in-the-loop",
-        "context_needed": "Customer account details, recent activity log, fraud indicator details, customer claim description, agent's conversation history",
-        "example": "Agent detects a customer is repeatedly trying different password variations. Human reviewer checks account security, may temporarily lock account, and contacts customer via verified phone to confirm identity.",
+        "name": "Policy-Sensitive Advice Review",
+        "trigger": "LLM judge flags low safety/relevance or confidence below 0.7",
+        "hitl_model": "human-on-the-loop",
+        "context_needed": "User query, draft response, guardrail flags, judge verdict and scores",
+        "example": "Agent gives uncertain answer about loan penalty fees and cites unverified values",
     },
 ]
 

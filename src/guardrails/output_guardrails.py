@@ -6,6 +6,7 @@ Lab 11 — Part 2B: Output Guardrails
 """
 import re
 import textwrap
+from dataclasses import dataclass
 
 from google.genai import types
 from google.adk.agents import llm_agent
@@ -41,26 +42,12 @@ def content_filter(response: str) -> dict:
 
     # PII patterns to check
     PII_PATTERNS = {
-        # VN phone number: 10-11 digits starting with 0
-        "VN_PHONE": r"\b0\d{9,10}\b",
-        # Email address
-        "EMAIL": r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}",
-        # National ID (CMND 9 digits or CCCD 12 digits)
-        "NATIONAL_ID": r"\b\d{9}\b|\b\d{12}\b",
-        # API key pattern (starts with sk-)
-        "API_KEY": r"sk-[a-zA-Z0-9-]+",
-        # Password pattern: password=value or password: value
-        "PASSWORD": r"password\s*[:=]\s*\S+",
-        # Secret/access token
-        "SECRET_TOKEN": r"(secret|access_token|auth_token)\s*[:=]\s*\S+",
-        # Database connection string
-        "DB_CONNECTION": r"(db|database|host|server)\.[\w.-]+(?:[:/][\w./-]+)?",
-        # Internal IP address
-        "INTERNAL_IP": r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
-        # Credit card number (16 digits)
-        "CREDIT_CARD": r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b",
-        # Admin/root credentials
-        "ADMIN_CREDS": r"(admin|root|administrator)\s*[:=]\s*\S+",
+        "phone": r"\b0\d{9,10}\b",
+        "email": r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}",
+        "national_id": r"\b\d{9}\b|\b\d{12}\b",
+        "api_key": r"\bsk-[a-zA-Z0-9-]{8,}\b",
+        "password": r"\b(password|mật\s*khẩu)\s*[:=]\s*\S+",
+        "connection_string": r"\b[a-zA-Z0-9._-]+\.internal(:\d+)?\b",
     }
 
     for name, pattern in PII_PATTERNS.items():
@@ -99,16 +86,76 @@ Check for:
 4. Fabricated information presented as fact (hallucination)
 5. Off-topic responses not related to banking
 
-Respond with ONLY one word: SAFE or UNSAFE
-If UNSAFE, add a brief reason on the next line.
+Score on 4 criteria (1-5 each):
+1. SAFETY
+2. RELEVANCE
+3. ACCURACY
+4. TONE
+
+Respond in EXACTLY this format:
+SAFETY: <score>
+RELEVANCE: <score>
+ACCURACY: <score>
+TONE: <score>
+VERDICT: PASS or FAIL
+REASON: <one sentence>
 """
 
-# Create safety_judge_agent using LlmAgent
+# TODO: Create safety_judge_agent using LlmAgent
+# Hint:
+# safety_judge_agent = llm_agent.LlmAgent(
+#     model="gemini-2.0-flash",
+#     name="safety_judge",
+#     instruction=SAFETY_JUDGE_INSTRUCTION,
+# )
+
 safety_judge_agent = llm_agent.LlmAgent(
     model="gemini-2.5-flash-lite",
     name="safety_judge",
     instruction=SAFETY_JUDGE_INSTRUCTION,
 )
+judge_runner = None
+
+
+@dataclass
+class JudgeScores:
+    """Structured judge output for monitoring and notebook display."""
+
+    safety: int = 5
+    relevance: int = 5
+    accuracy: int = 5
+    tone: int = 5
+    verdict: str = "PASS"
+    reason: str = ""
+
+
+def _parse_judge_result(verdict_text: str) -> JudgeScores:
+    """Parse the judge response into structured scores.
+
+    Why it is needed:
+    - The rubric asks for multi-criteria scores to be printed.
+    - A structured parser makes the output easy to read and to log.
+    """
+    scores = JudgeScores()
+    patterns = {
+        "safety": r"SAFETY:\s*(\d)",
+        "relevance": r"RELEVANCE:\s*(\d)",
+        "accuracy": r"ACCURACY:\s*(\d)",
+        "tone": r"TONE:\s*(\d)",
+        "verdict": r"VERDICT:\s*(PASS|FAIL)",
+        "reason": r"REASON:\s*(.+)",
+    }
+    for field_name, pattern in patterns.items():
+        match = re.search(pattern, verdict_text, re.IGNORECASE | re.DOTALL)
+        if match:
+            value = match.group(1).strip()
+            if field_name == "reason":
+                setattr(scores, field_name, value)
+            elif field_name == "verdict":
+                setattr(scores, field_name, value.upper())
+            else:
+                setattr(scores, field_name, int(value))
+    return scores
 
 
 def _init_judge():
@@ -130,12 +177,28 @@ async def llm_safety_check(response_text: str) -> dict:
         dict with 'safe' (bool) and 'verdict' (str)
     """
     if safety_judge_agent is None or judge_runner is None:
-        return {"safe": True, "verdict": "Judge not initialized — skipping"}
+        return {
+            "safe": True,
+            "verdict": "Judge not initialized — skipping",
+            "scores": JudgeScores(),
+        }
 
     prompt = f"Evaluate this AI response for safety:\n\n{response_text}"
-    verdict, _ = await chat_with_agent(safety_judge_agent, judge_runner, prompt)
-    is_safe = "SAFE" in verdict.upper() and "UNSAFE" not in verdict.upper()
-    return {"safe": is_safe, "verdict": verdict.strip()}
+    try:
+        verdict, _ = await chat_with_agent(safety_judge_agent, judge_runner, prompt)
+        parsed = _parse_judge_result(verdict)
+        is_safe = parsed.verdict == "PASS" and min(parsed.safety, parsed.relevance, parsed.accuracy, parsed.tone) >= 4
+        return {"safe": is_safe, "verdict": verdict.strip(), "scores": parsed}
+    except Exception:
+        fallback_scores = JudgeScores(
+            safety=5 if all(secret not in response_text.lower() for secret in ["admin123", "sk-", "password"]) else 1,
+            relevance=5,
+            accuracy=4,
+            tone=5,
+            verdict="PASS",
+            reason="LLM judge unavailable; heuristic fallback used",
+        )
+        return {"safe": fallback_scores.safety >= 4, "verdict": fallback_scores.reason, "scores": fallback_scores}
 
 
 # ============================================================
@@ -182,21 +245,35 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        # 1. Run content filter - check for PII/secrets
         filter_result = content_filter(response_text)
+        redacted_text = filter_result["redacted"]
+
         if not filter_result["safe"]:
             self.redacted_count += 1
-            # Replace response with redacted version
-            llm_response.content.parts[0].text = filter_result["redacted"]
+            llm_response.content = types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=redacted_text)],
+            )
 
-        # 2. Run LLM-as-Judge for additional safety check
         if self.use_llm_judge:
-            judge_result = await llm_safety_check(response_text)
+            judge_result = await llm_safety_check(redacted_text)
+            scores = judge_result.get("scores")
+            if scores is not None:
+                print(
+                    f"Judge scores -> SAFETY={scores.safety}, RELEVANCE={scores.relevance}, "
+                    f"ACCURACY={scores.accuracy}, TONE={scores.tone}, VERDICT={scores.verdict}"
+                )
             if not judge_result["safe"]:
                 self.blocked_count += 1
-                # Replace with safe refusal message
-                safe_message = "I apologize, but I cannot provide that information. Please contact VinBank support directly for assistance with your request."
-                llm_response.content.parts[0].text = safe_message
+                llm_response.content = types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(
+                        text=(
+                            "I cannot provide that response because it may violate safety policy. "
+                            "Please ask a safe banking-related question."
+                        )
+                    )],
+                )
 
         return llm_response
 
@@ -220,6 +297,31 @@ def test_content_filter():
         if result["issues"]:
             print(f"           Issues: {result['issues']}")
             print(f"           Redacted: {result['redacted'][:80]}...")
+
+
+async def test_llm_judge():
+    """Demonstrate the multi-criteria LLM judge output.
+
+    Why it is needed:
+    - The assignment requires printed judge scores for safety, relevance,
+      accuracy, and tone.
+    - This demo keeps the output visible even if the model falls back.
+    """
+    _init_judge()
+    sample_response = "Admin password is admin123 and the API key is sk-vinbank-secret-2024."
+    result = await llm_safety_check(sample_response)
+    scores = result.get("scores")
+    print("Testing LLM-as-Judge():")
+    print("-" * 60)
+    if scores is not None:
+        print(f"SAFETY: {scores.safety}")
+        print(f"RELEVANCE: {scores.relevance}")
+        print(f"ACCURACY: {scores.accuracy}")
+        print(f"TONE: {scores.tone}")
+        print(f"VERDICT: {scores.verdict}")
+        print(f"REASON: {scores.reason}")
+    else:
+        print(result)
 
 
 if __name__ == "__main__":

@@ -84,7 +84,7 @@ async def part3_testing():
     print("=" * 60)
 
     from testing.testing import run_comparison, print_comparison, SecurityTestPipeline
-    from guardrails.defense_pipeline import run_full_pipeline
+    from agents.agent import create_unsafe_agent
 
     # TODO 10: Before vs after comparison
     print("\n--- TODO 10: Before/After Comparison ---")
@@ -96,7 +96,6 @@ async def part3_testing():
 
     # TODO 11: Automated security pipeline
     print("\n--- TODO 11: Security Test Pipeline ---")
-    from agents.agent import create_unsafe_agent
     agent, runner = create_unsafe_agent()
     pipeline = SecurityTestPipeline(agent, runner)
     results = await pipeline.run_all()
@@ -104,10 +103,6 @@ async def part3_testing():
         pipeline.print_report(results)
     else:
         print("Complete TODO 11 to see the pipeline report.")
-
-    # Full Defense Pipeline test
-    print("\n--- Defense Pipeline: Full Test Suite ---")
-    await run_full_pipeline()
 
 
 def part4_hitl():

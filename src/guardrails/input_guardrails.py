@@ -38,9 +38,67 @@ def detect_injection(user_input: str) -> bool:
         True if injection detected, False otherwise
     """
     INJECTION_PATTERNS = [
-        # TODO: Add at least 5 regex patterns
-        # Example:
-        # r"ignore (all )?(previous|above) instructions",
+        # Direct prompt override attempts
+        r"ignore\s*(all\s+)?(previous|above|prior)\s+instructions",
+        r"disregard\s*(all\s+)?(previous|prior)\s+(instructions|commands)",
+        r"override\s+(your\s+)?(system\s+)?(instructions|prompt|protocols)",
+        r"disregard\s+your\s+instructions",
+        r"forget\s+(all\s+)?(your\s+)?(previous|prior)\s+instructions",
+
+        # Role confusion / jailbreak
+        r"you\s+are\s+now\s+(\w+\s+)*(\w+)",
+        r"(pretend|act)\s+(as\s+)?(a\s+|an\s+)?unrestricted",
+        r"(pretend|act)\s+(as\s+)?(a\s+|an\s+)?(different|new|alternative)\s+(AI|model|assistant)",
+        r"(i am|I'm|iam)\s+(now\s+)?(DAN|unrestricted|admin|superuser|god)",
+        r"you\s+are\s+(a\s+)?(jailbroken|DAN|unconstrained)",
+
+        # System prompt extraction
+        r"(reveal|show|tell|share)\s+(me\s+)?(your\s+)?(system\s+)?(prompt|instructions|configuration|config)",
+        r"(what|extract)\s+(is\s+)?(your\s+)?(system\s+)?(prompt|instructions)",
+        r"(repeat|output|print)\s+(your\s+)?(system\s+)?(prompt|instructions)",
+        r"show\s+(me\s+)?(the\s+)?(raw\s+)?(system\s+)?prompt",
+        r"reveal\s+(all\s+)?your\s+(internal\s+)?(instructions|rules|guidelines)",
+        r"what\s+are\s+(your\s+)?(system\s+)?(instructions|directives|prompts)",
+
+        # Confidential/credential extraction
+        r"(what is|tell me|reveal|give me)\s+(the\s+)?(admin\s+)?password",
+        r"(what is|tell me|reveal|give me)\s+(the\s+)?(api\s+)?key",
+        r"(what is|tell me|reveal)\s+(the\s+)?database\s+(connection|endpoint|host|string|uri)",
+        r"(what is|tell me|reveal)\s+(your\s+)?(internal\s+)?(IP|address|hostname|endpoint)",
+        r"what\s+(systems|services|databases|servers)\s+(are\s+)?(you|your)\s+(connected|linked|access)",
+
+        # Vietnamese prompt injection
+        r"bỏ\s+qua\s+(mọi|tất\s+cả)\s+(hướng\s+dẫn|chỉ\s+dẫn|instructions)",
+        r"bỏ\s+qua\s+mọi\s+hướng\s+dẫn\s+trước\s+đó",
+        r"tiết\s+lộ\s+(mật\s+khẩu|key|api|system)",
+        r"hãy\s+(tiết\s+lộ|cho\s+tôi)\s+(mật\s+khẩu|key|api)",
+        r"cho\s+tôi\s+xem\s+(system\s+)?prompt",
+        r"làm\s+theo\s+(những\s+)?hướng\s+dẫn\s+mới",
+        r"hướng\s+dẫn\s+(của|từ)\s+(tôi|user|người\s+dùng)\s+chỉ",
+        r"hãy\s+tin\s+(tưởng\s+)?(tôi|là\s+admin|tôi\s+là)",
+
+        # Encoding/obfuscation attacks
+        r"(convert|encode|translate)\s+(your\s+)?(instructions|system\s+prompt)\s+(to|in|into)\s+(base64|base\s*64|hex|hexadecimal|rot13|rot\s*13)",
+        r"decode\s+this\s+base64",
+        r"(output|print|reveal)\s+(your\s+)?(config|configuration|credentials)\s+(as|in)\s+(json|yaml|xml|markdown)",
+
+        # DAN/Jailbreak variants
+        r"\[(system|dev|god)\s*mode\]",
+        r"\{(system|dev|god)\s*mode\}",
+        r"\(\(jailbreak\)\)",
+        r"\[( Roleplay|DAN|matrix)",
+
+        # Authority impersonation
+        r"(i am|i'm|im)\s+(the\s+)?(CEO|CISO|admin|administrator|developer|engineer|security)",
+        r"(per|following)\s+(ticket|request|order)\s+",
+        r"(this is|for)\s+(security\s+)?(audit|compliance|review|investigation)",
+        r"(official|urgent)\s+(business|request|notice)",
+
+        # Escalation/compromise language
+        r"(just|simply)\s+(do|follow|execute)\s+(this|that|the\s+following)",
+        r"(there('s| is)|it('s| is))\s+(no|not\s+)((harm|danger|risk|difficult|problem)\s+)?(in|with)",
+        r"trust\s+(me|this\s+user|this\s+request)",
+        r"(you\s+can|must)\s+(follow|obey|accept)\s+(my|these|the)\s+(instructions|commands|requests)",
     ]
 
     for pattern in INJECTION_PATTERNS:
@@ -70,12 +128,24 @@ def topic_filter(user_input: str) -> bool:
     """
     input_lower = user_input.lower()
 
-    # TODO: Implement logic:
-    # 1. If input contains any blocked topic -> return True
-    # 2. If input doesn't contain any allowed topic -> return True
-    # 3. Otherwise -> return False (allow)
+    # 1. If input contains any blocked topic -> return True (block immediately)
+    for topic in BLOCKED_TOPICS:
+        if topic in input_lower:
+            return True
 
-    pass  # Replace with your implementation
+    # 2. Check if input contains at least one allowed topic
+    has_allowed_topic = False
+    for topic in ALLOWED_TOPICS:
+        if topic in input_lower:
+            has_allowed_topic = True
+            break
+
+    # If no allowed topic found -> return True (block as off-topic)
+    if not has_allowed_topic:
+        return True
+
+    # 3. Otherwise -> return False (allow)
+    return False
 
 
 # ============================================================
@@ -128,14 +198,26 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         self.total_count += 1
         text = self._extract_text(user_message)
 
-        # TODO: Implement logic:
-        # 1. Call detect_injection(text)
-        #    - If True: increment blocked_count, return self._block_response("...")
-        # 2. Call topic_filter(text)
-        #    - If True: increment blocked_count, return self._block_response("...")
-        # 3. If both are False: return None (let message through)
+        # 1. Check for prompt injection
+        if detect_injection(text):
+            self.blocked_count += 1
+            return self._block_response(
+                "I cannot process this request. It appears to contain instructions "
+                "that could compromise system safety. I'm here to help with banking "
+                "questions only."
+            )
 
-        pass  # Replace with your implementation
+        # 2. Check topic filter
+        if topic_filter(text):
+            self.blocked_count += 1
+            return self._block_response(
+                "I'm a VinBank assistant and can only help with banking-related "
+                "questions such as accounts, transactions, loans, and interest rates. "
+                "How can I assist you with your banking needs today?"
+            )
+
+        # 3. If both checks pass -> let message through
+        return None
 
 
 # ============================================================

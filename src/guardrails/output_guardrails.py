@@ -41,12 +41,26 @@ def content_filter(response: str) -> dict:
 
     # PII patterns to check
     PII_PATTERNS = {
-        # TODO: Add regex patterns for:
-        # - VN phone number: r"0\d{9,10}"
-        # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
-        # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
-        # - API key pattern: r"sk-[a-zA-Z0-9-]+"
-        # - Password pattern: r"password\s*[:=]\s*\S+"
+        # VN phone number: 10-11 digits starting with 0
+        "VN_PHONE": r"\b0\d{9,10}\b",
+        # Email address
+        "EMAIL": r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}",
+        # National ID (CMND 9 digits or CCCD 12 digits)
+        "NATIONAL_ID": r"\b\d{9}\b|\b\d{12}\b",
+        # API key pattern (starts with sk-)
+        "API_KEY": r"sk-[a-zA-Z0-9-]+",
+        # Password pattern: password=value or password: value
+        "PASSWORD": r"password\s*[:=]\s*\S+",
+        # Secret/access token
+        "SECRET_TOKEN": r"(secret|access_token|auth_token)\s*[:=]\s*\S+",
+        # Database connection string
+        "DB_CONNECTION": r"(db|database|host|server)\.[\w.-]+(?:[:/][\w./-]+)?",
+        # Internal IP address
+        "INTERNAL_IP": r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
+        # Credit card number (16 digits)
+        "CREDIT_CARD": r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b",
+        # Admin/root credentials
+        "ADMIN_CREDS": r"(admin|root|administrator)\s*[:=]\s*\S+",
     }
 
     for name, pattern in PII_PATTERNS.items():
@@ -89,16 +103,12 @@ Respond with ONLY one word: SAFE or UNSAFE
 If UNSAFE, add a brief reason on the next line.
 """
 
-# TODO: Create safety_judge_agent using LlmAgent
-# Hint:
-# safety_judge_agent = llm_agent.LlmAgent(
-#     model="gemini-2.0-flash",
-#     name="safety_judge",
-#     instruction=SAFETY_JUDGE_INSTRUCTION,
-# )
-
-safety_judge_agent = None  # TODO: Replace with implementation
-judge_runner = None
+# Create safety_judge_agent using LlmAgent
+safety_judge_agent = llm_agent.LlmAgent(
+    model="gemini-2.5-flash-lite",
+    name="safety_judge",
+    instruction=SAFETY_JUDGE_INSTRUCTION,
+)
 
 
 def _init_judge():
@@ -172,16 +182,23 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        # TODO: Implement logic:
-        # 1. Call content_filter(response_text)
-        #    - If issues found: replace llm_response.content with redacted version
-        #    - Increment self.redacted_count
-        # 2. If use_llm_judge: call llm_safety_check(response_text)
-        #    - If unsafe: replace llm_response.content with a safe message
-        #    - Increment self.blocked_count
-        # 3. Return llm_response (possibly modified)
+        # 1. Run content filter - check for PII/secrets
+        filter_result = content_filter(response_text)
+        if not filter_result["safe"]:
+            self.redacted_count += 1
+            # Replace response with redacted version
+            llm_response.content.parts[0].text = filter_result["redacted"]
 
-        return llm_response  # TODO: modify if needed
+        # 2. Run LLM-as-Judge for additional safety check
+        if self.use_llm_judge:
+            judge_result = await llm_safety_check(response_text)
+            if not judge_result["safe"]:
+                self.blocked_count += 1
+                # Replace with safe refusal message
+                safe_message = "I apologize, but I cannot provide that information. Please contact VinBank support directly for assistance with your request."
+                llm_response.content.parts[0].text = safe_message
+
+        return llm_response
 
 
 # ============================================================
